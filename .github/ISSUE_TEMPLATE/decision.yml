@@ -1,0 +1,31 @@
+name: Decision
+description: A choice with tradeoffs that Thomas decides. The closed issue is the decision record.
+title: "Decision: "
+labels: [decision]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why this needs deciding, with facts and `path:line` references.
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options
+      description: Two or more options with pros, cons, and risk to behaviour parity.
+    validations:
+      required: true
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Recommendation
+      description: One option and the reason.
+    validations:
+      required: true
+  - type: textarea
+    id: consequences
+    attributes:
+      label: Consequences
+      description: What follows, and what this blocks or unblocks.
