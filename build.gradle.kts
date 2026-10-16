@@ -289,6 +289,7 @@ testing {
         }
 
         val systemTest by registering(JvmTestSuite::class) {
+            val dockerImageTest = "com.hivemq.cli.commands.distribution.DockerImageST"
             targets {
                 all {
                     testTask {
@@ -301,12 +302,29 @@ testing {
                         systemProperties["cliExec"] = "${javaLauncher.get().executablePath.asFile.absolutePath} -jar ${
                             tasks.shadowJar.get().archiveFile.get()
                         }"
+                        filter.excludeTestsMatching(dockerImageTest)
                     }
                 }
                 register("systemTestNative") {
                     testTask {
                         dependsOn(tasks.nativeCompile)
                         systemProperties["cliExec"] = tasks.nativeCompile.get().outputFile.get().toString()
+                        filter.excludeTestsMatching(dockerImageTest)
+                    }
+                }
+                // Only this task builds the CLI image, so only one CI job pulls its base image.
+                register("systemTestDocker") {
+                    testTask {
+                        filter.includeTestsMatching(dockerImageTest)
+                    }
+                    oci.of(testTask) {
+                        imageDependencies {
+                            runtime(project()).tag("latest")
+                        }
+                        val linuxAmd64 = platformSelector(platform("linux", "amd64"))
+                        val linuxArm64v8 = platformSelector(platform("linux", "arm64", "v8"))
+                        platformSelector =
+                            if (System.getenv("CI_RUN") != null) linuxAmd64 else linuxAmd64.and(linuxArm64v8)
                     }
                 }
             }
@@ -323,15 +341,6 @@ testing {
                 implementation(libs.gson)
                 implementation(libs.guava)
                 implementation(libs.hivemq.mqttClient)
-            }
-
-            oci.of(this) {
-                imageDependencies {
-                    runtime(project()).tag("latest")
-                }
-                val linuxAmd64 = platformSelector(platform("linux", "amd64"))
-                val linuxArm64v8 = platformSelector(platform("linux", "arm64", "v8"))
-                platformSelector = if (System.getenv("CI_RUN") != null) linuxAmd64 else linuxAmd64.and(linuxArm64v8)
             }
         }
 
