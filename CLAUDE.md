@@ -27,12 +27,14 @@ Java and Go live side by side until cut-over. Overview and rules: issue #3.
 2. Done = tests green (on Java for characterization, on Java and Go for ports), reviewed by a
    Claude code-review agent and by Codex, PR open. Never merge; Thomas reviews and merges.
    - Codex only reviews, it never writes code:
-     `codex review -c sandbox_mode='"read-only"' --base master "<goal of the PR and what to check>"`
+     `codex exec -s read-only "Review only, don't modify files. Run git diff master...HEAD. <goal of the PR, what to check>"`
+     (`codex review --base` can't take a prompt.)
    - Address or rebut every finding; list both reviews' findings and outcomes in the PR.
 3. End with a handoff comment on the issue: done, open, surprises.
 
 ## Build & test
-- Java: `./gradlew build`; system tests: `./gradlew systemTest` (shadow jar) and
-  `./gradlew systemTestNative`. The harness gets the executable from the `cliExec` system property
-  (`src/systemTest/java/com/hivemq/cli/utils/cli/MqttCli.java`).
+- Java: `./gradlew build` (includes `systemTestNative`, which needs `./gradlew installNativeImageTooling`
+  first). System tests: `./gradlew systemTest` (shadow jar), `./gradlew systemTestNative`, and
+  `./gradlew systemTestDocker` (`DockerImageST` only; builds the CLI image). The harness gets the
+  executable from the `cliExec` system property (`src/systemTest/java/com/hivemq/cli/utils/cli/MqttCli.java`).
 - Go: to be added in M0.

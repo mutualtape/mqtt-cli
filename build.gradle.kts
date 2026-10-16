@@ -289,6 +289,7 @@ testing {
         }
 
         val systemTest by registering(JvmTestSuite::class) {
+            // also excluded from the system-test splits in .github/workflows/check.yml (exclude-glob)
             val dockerImageTest = "com.hivemq.cli.commands.distribution.DockerImageST"
             targets {
                 all {
