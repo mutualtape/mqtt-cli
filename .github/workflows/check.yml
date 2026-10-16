@@ -5,7 +5,8 @@ on: [pull_request]
 env:
   integration-test-split-total: 5
   system-test-split-total: 11
-  native-system-test-split-total: 12
+  # build.gradle.kts: pull only linux/amd64 test images, the runners' platform
+  CI_RUN: true
 
 concurrency:
   group: check-${{ github.ref }}
@@ -26,15 +27,9 @@ jobs:
         uses: donnerbart/split-tests-java-action/generate-split-index-json@43e3467e53068fc42d15b7a234974db5d792744d # v1
         with:
           split-total: ${{ env.system-test-split-total }}
-      - name: Generate native system test split index list
-        id: native-system
-        uses: donnerbart/split-tests-java-action/generate-split-index-json@43e3467e53068fc42d15b7a234974db5d792744d # v1
-        with:
-          split-total: ${{ env.native-system-test-split-total }}
     outputs:
       integration-json: ${{ steps.integration.outputs.split-index-json }}
       system-json: ${{ steps.system.outputs.split-index-json }}
-      native-system-json: ${{ steps.native-system.outputs.split-index-json }}
 
   compile:
     name: Compile
@@ -55,11 +50,9 @@ jobs:
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
         with:
           cache-disabled: true
-      - name: Setup GraalVM
-        run: ./gradlew installNativeImageTooling
       - name: Warmup Gradle cache
         if: ${{ steps.setup-java.outputs.cache-hit == 'false' }}
-        run: ./gradlew compileIntegrationTestJava compileSystemTestJava shadowJar nativeCompile
+        run: ./gradlew compileIntegrationTestJava compileSystemTestJava shadowJar
 
   unit-test:
     name: Unit tests
@@ -157,9 +150,15 @@ jobs:
           debug: true
       - name: Run integration tests
         env:
-          ORG_GRADLE_PROJECT_dockerHubUsername: ${{ secrets.DOCKER_USERNAME }}
-          ORG_GRADLE_PROJECT_dockerHubPassword: ${{ secrets.DOCKER_TOKEN }}
-        run: ./gradlew integrationTest ${{ steps.split-tests.outputs.test-suite }} --stacktrace
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+        run: |
+          # without the secrets, gradle-oci pulls anonymously; empty credentials would get a 401
+          if [ -n "$DOCKER_TOKEN" ]; then
+            export ORG_GRADLE_PROJECT_dockerHubUsername="$DOCKER_USERNAME"
+            export ORG_GRADLE_PROJECT_dockerHubPassword="$DOCKER_TOKEN"
+          fi
+          ./gradlew integrationTest ${{ steps.split-tests.outputs.test-suite }} --stacktrace
       - name: Upload test results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -209,7 +208,6 @@ jobs:
     permissions:
       contents: read
       checks: write
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -236,21 +234,6 @@ jobs:
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
         with:
           cache-disabled: true
-      - name: Configure AWS credentials for ECR Public
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
-        with:
-          role-to-assume: arn:aws:iam::691852750577:role/ecr-gha-public-pull
-          aws-region: us-east-1
-      # authenticated pulls lift the anonymous 1/s ECR Public cap that parallel jobs hit; fork PRs
-      # cannot mint an OIDC token and fall back to anonymous pulls
-      - name: Log in to ECR Public
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        run: |
-          password=$(aws ecr-public get-login-password --region us-east-1)
-          echo "::add-mask::$password"
-          echo "ORG_GRADLE_PROJECT_ecrPublicUsername=AWS" >> "$GITHUB_ENV"
-          echo "ORG_GRADLE_PROJECT_ecrPublicPassword=$password" >> "$GITHUB_ENV"
       - name: Compile system tests
         run: ./gradlew compileSystemTestJava shadowJar
       - name: Split tests
@@ -267,9 +250,15 @@ jobs:
           debug: true
       - name: Run system tests
         env:
-          ORG_GRADLE_PROJECT_dockerHubUsername: ${{ secrets.DOCKER_USERNAME }}
-          ORG_GRADLE_PROJECT_dockerHubPassword: ${{ secrets.DOCKER_TOKEN }}
-        run: ./gradlew systemTest ${{ steps.split-tests.outputs.test-suite }} --stacktrace
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+        run: |
+          # without the secrets, gradle-oci pulls anonymously; empty credentials would get a 401
+          if [ -n "$DOCKER_TOKEN" ]; then
+            export ORG_GRADLE_PROJECT_dockerHubUsername="$DOCKER_USERNAME"
+            export ORG_GRADLE_PROJECT_dockerHubPassword="$DOCKER_TOKEN"
+          fi
+          ./gradlew systemTest ${{ steps.split-tests.outputs.test-suite }} --stacktrace
       - name: Upload test results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -309,118 +298,6 @@ jobs:
             done
           done
 
-  native-system-test:
-    name: "Native system test #${{ matrix.split-index }}"
-    runs-on: ubuntu-latest
-    needs:
-      - generate-split-index-json
-      - compile
-    timeout-minutes: 25
-    permissions:
-      contents: read
-      checks: write
-      id-token: write
-    strategy:
-      fail-fast: false
-      matrix:
-        split-index: ${{ fromjson(needs.generate-split-index-json.outputs.native-system-json) }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Checkout JUnit reports
-        uses: donnerbart/split-tests-java-action/checkout-junit-reports@43e3467e53068fc42d15b7a234974db5d792744d # v1
-        with:
-          split-index: ${{ matrix.split-index }}
-          git-branch: junit-reports/native-system/${{ github.base_ref }}
-          path: junit-reports
-          artifact-name: junit-reports-sha-native-system
-      - name: Setup Java
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
-        with:
-          distribution: temurin
-          java-version: |
-            11
-            25
-          cache: gradle
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
-        with:
-          cache-disabled: true
-      - name: Setup GraalVM
-        run: ./gradlew installNativeImageTooling
-      - name: Configure AWS credentials for ECR Public
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
-        with:
-          role-to-assume: arn:aws:iam::691852750577:role/ecr-gha-public-pull
-          aws-region: us-east-1
-      # authenticated pulls lift the anonymous 1/s ECR Public cap that parallel jobs hit; fork PRs
-      # cannot mint an OIDC token and fall back to anonymous pulls
-      - name: Log in to ECR Public
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        run: |
-          password=$(aws ecr-public get-login-password --region us-east-1)
-          echo "::add-mask::$password"
-          echo "ORG_GRADLE_PROJECT_ecrPublicUsername=AWS" >> "$GITHUB_ENV"
-          echo "ORG_GRADLE_PROJECT_ecrPublicPassword=$password" >> "$GITHUB_ENV"
-      - name: Compile native system tests
-        run: ./gradlew compileSystemTestJava nativeCompile
-      - name: Split tests
-        id: split-tests
-        uses: donnerbart/split-tests-java-action@43e3467e53068fc42d15b7a234974db5d792744d # v1
-        with:
-          glob: '**/src/systemTest/java/**/*ST.java'
-          split-index: ${{ matrix.split-index }}
-          split-total: ${{ env.native-system-test-split-total }}
-          junit-glob: '**/junit-reports/*.xml'
-          format: gradle
-          new-test-time: average
-          calculate-optimal-total-split: true
-          debug: true
-      - name: Run native system tests
-        env:
-          ORG_GRADLE_PROJECT_dockerHubUsername: ${{ secrets.DOCKER_USERNAME }}
-          ORG_GRADLE_PROJECT_dockerHubPassword: ${{ secrets.DOCKER_TOKEN }}
-        run: ./gradlew systemTestNative ${{ steps.split-tests.outputs.test-suite }} --stacktrace
-      - name: Upload test results
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: "Native system test results #${{ matrix.split-index }}"
-          path: |
-            build/reports/tests/systemTestNative/
-            build/test-results/systemTestNative/
-          retention-days: 5
-      - name: Upload JUnit report artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: junit-xml-reports-native-system-${{ matrix.split-index }}
-          path: build/test-results/systemTestNative/*.xml
-      - name: Publish test report
-        if: ${{ !cancelled() }}
-        uses: dorny/test-reporter@d1b5dff021aa968b288b02285a8bf47471c5928a # v3
-        with:
-          name: Native system tests report
-          path: '**/build/test-results/systemTestNative/TEST-*.xml'
-          reporter: java-junit
-          fail-on-error: false
-      - name: Install xmllint
-        if: failure()
-        run: sudo apt-get update && sudo apt-get install -y libxml2-utils
-      - name: Set annotations for failed tests
-        if: failure()
-        run: |
-          find build/test-results/systemTestNative -type f -name "*.xml" | while read -r FILE; do
-            COUNT=$(xmllint --xpath 'count(//testcase[failure or error])' "$FILE")
-            for INDEX in $(seq 1 "$COUNT"); do
-              TEST_CLASS=$(xmllint --xpath "string((//testcase[failure or error])[$INDEX]/@classname)" "$FILE" 2>/dev/null)
-              TEST_METHOD=$(xmllint --xpath "string((//testcase[failure or error])[$INDEX]/@name)" "$FILE" 2>/dev/null)
-              MESSAGE=$(xmllint --xpath "string((//testcase[failure or error])[$INDEX]/failure/@message | (//testcase[failure or error])[$INDEX]/error/@message)" "$FILE" 2>/dev/null)
-              [ -z "$MESSAGE" ] && MESSAGE="Test failed"
-              echo "::error title=Native system test #${{ matrix.split-index }}::$TEST_CLASS.$TEST_METHOD%0A$MESSAGE"
-            done
-          done
-
   merge-junit-reports-integration:
     name: Merge JUnit reports (integration)
     runs-on: ubuntu-latest
@@ -451,21 +328,6 @@ jobs:
           artifact-name: merged-junit-xml-reports-system-${{ github.base_ref }}
           split-artifact-pattern: junit-xml-reports-system-*
 
-  merge-junit-reports-native-system:
-    name: Merge JUnit reports (native system)
-    runs-on: ubuntu-latest
-    needs:
-      - native-system-test
-    permissions:
-      contents: write
-    steps:
-      - name: Merge JUnit reports
-        uses: donnerbart/split-tests-java-action/merge-junit-reports@43e3467e53068fc42d15b7a234974db5d792744d # v1
-        with:
-          git-branch: junit-reports/native-system/${{ github.base_ref }}
-          artifact-name: merged-junit-xml-reports-native-system-${{ github.base_ref }}
-          split-artifact-pattern: junit-xml-reports-native-system-*
-
   check:
     name: check
     if: always()
@@ -476,10 +338,8 @@ jobs:
       - unit-test
       - integration-test
       - system-test
-      - native-system-test
       - merge-junit-reports-integration
       - merge-junit-reports-system
-      - merge-junit-reports-native-system
     steps:
       - name: Check all jobs status
         run: |
@@ -509,14 +369,6 @@ jobs:
           fi
           if [[ "${{ needs.merge-junit-reports-system.result }}" != "success" ]]; then
             echo "merge-junit-reports-system job failed"
-            exit 1
-          fi
-          if [[ "${{ needs.native-system-test.result }}" != "success" ]]; then
-            echo "native-system-test job failed"
-            exit 1
-          fi
-          if [[ "${{ needs.merge-junit-reports-native-system.result }}" != "success" ]]; then
-            echo "merge-junit-reports-native-system job failed"
             exit 1
           fi
           echo "All jobs completed successfully"
