@@ -25,7 +25,10 @@ Java and Go live side by side until cut-over. Overview and rules: issue #3.
 ## Session routine
 1. One issue per session. Branch `<issue>-<slug>`, one PR against the fork's `master` with `Closes #N`.
 2. Done = tests green (on Java for characterization, on Java and Go for ports), reviewed by a
-   code-review agent, PR open. Never merge; Thomas reviews and merges.
+   Claude code-review agent and by Codex, PR open. Never merge; Thomas reviews and merges.
+   - Codex only reviews, it never writes code:
+     `codex review -c sandbox_mode='"read-only"' --base master "<goal of the PR and what to check>"`
+   - Address or rebut every finding; list both reviews' findings and outcomes in the PR.
 3. End with a handoff comment on the issue: done, open, surprises.
 
 ## Build & test
